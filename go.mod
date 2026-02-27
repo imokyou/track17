@@ -1,3 +1,3 @@
-module github.com/lupt/track17
+module github.com/imokyou/track17
 
 go 1.25.6

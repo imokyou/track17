@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/lupt/track17"
+	"github.com/imokyou/track17"
 )
 
 func main() {

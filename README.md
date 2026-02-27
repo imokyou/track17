@@ -1,6 +1,6 @@
 # track17
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/lupt/track17.svg)](https://pkg.go.dev/github.com/lupt/track17)
+[![Go Reference](https://pkg.go.dev/badge/github.com/imokyou/track17.svg)](https://pkg.go.dev/github.com/imokyou/track17)
 
 > 🚀 17Track API v2.4 企业级 Go SDK —— 零依赖、类型安全、生产就绪
 
@@ -18,7 +18,7 @@
 ## 📦 安装
 
 ```bash
-go get github.com/lupt/track17
+go get github.com/imokyou/track17
 ```
 
 ## 🚀 快速开始
@@ -31,7 +31,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/lupt/track17"
+    "github.com/imokyou/track17"
 )
 
 func main() {
