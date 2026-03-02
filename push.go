@@ -1,6 +1,9 @@
 package track17
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // PushService handles manual push notification operations.
 type PushService struct {
@@ -37,6 +40,12 @@ type PushAccepted struct {
 //	    {Number: "RR123456789CN", CarrierCode: 3011},
 //	})
 func (s *PushService) Push(ctx context.Context, items []PushRequest) (*PushResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result PushResponse
 	if err := s.client.doRequest(ctx, "/push", items, &result); err != nil {
 		return nil, err

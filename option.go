@@ -62,8 +62,8 @@ func WithRetry(maxRetries int, wait time.Duration) Option {
 	}
 }
 
-// WithDebug enables debug logging to stdout.
-// When enabled, all request/response bodies are printed.
+// WithDebug enables debug logging to stderr.
+// When enabled, all request/response bodies are logged.
 //
 // Example:
 //
@@ -71,5 +71,18 @@ func WithRetry(maxRetries int, wait time.Duration) Option {
 func WithDebug(debug bool) Option {
 	return func(c *Client) {
 		c.debug = debug
+	}
+}
+
+// WithLogger sets a custom logger for debug output.
+// The logger must implement the Logger interface (Printf method).
+// Default is log.New(os.Stderr, "", log.LstdFlags).
+//
+// Example:
+//
+//	client := track17.New("key", track17.WithLogger(myLogger))
+func WithLogger(logger Logger) Option {
+	return func(c *Client) {
+		c.logger = logger
 	}
 }

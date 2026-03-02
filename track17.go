@@ -25,7 +25,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -43,6 +45,11 @@ const (
 	// Version is the SDK version.
 	Version = "1.0.0"
 )
+
+// Logger defines a minimal logging interface for the SDK.
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
 
 // Client is the 17Track API client. It manages communication with the 17Track
 // API v2.4 and provides access to the various API services.
@@ -66,6 +73,9 @@ type Client struct {
 	// debug enables verbose logging.
 	debug bool
 
+	// logger is the logger used for debug output.
+	logger Logger
+
 	// Services
 	Tracking *TrackingService
 	Query    *QueryService
@@ -84,6 +94,10 @@ type Client struct {
 //	    track17.WithRetry(3, time.Second),
 //	)
 func New(apiKey string, opts ...Option) *Client {
+	if apiKey == "" {
+		panic("track17: API key must not be empty")
+	}
+
 	c := &Client{
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
@@ -92,6 +106,7 @@ func New(apiKey string, opts ...Option) *Client {
 		baseURL:    DefaultBaseURL,
 		maxRetries: 0,
 		retryWait:  time.Second,
+		logger:     log.New(os.Stderr, "", log.LstdFlags),
 	}
 
 	for _, opt := range opts {
@@ -110,6 +125,12 @@ func New(apiKey string, opts ...Option) *Client {
 	return c
 }
 
+// Close releases any resources held by the client.
+// It is safe to call Close multiple times.
+func (c *Client) Close() {
+	c.httpClient.CloseIdleConnections()
+}
+
 // apiResponse is the common response wrapper from the 17Track API.
 type apiResponse struct {
 	Code int             `json:"code"`
@@ -119,7 +140,9 @@ type apiResponse struct {
 // doRequest performs an authenticated API request to the given path.
 func (c *Client) doRequest(ctx context.Context, path string, body interface{}, result interface{}) error {
 	// Wait for rate limiter
-	c.rateLimiter.wait()
+	if err := c.rateLimiter.wait(ctx); err != nil {
+		return err
+	}
 
 	// Marshal request body
 	var bodyReader io.Reader
@@ -131,7 +154,7 @@ func (c *Client) doRequest(ctx context.Context, path string, body interface{}, r
 		bodyReader = bytes.NewReader(jsonBody)
 
 		if c.debug {
-			fmt.Printf("[track17] POST %s%s\n  Body: %s\n", c.baseURL, path, string(jsonBody))
+			c.logger.Printf("[track17] POST %s%s\n  Body: %s", c.baseURL, path, string(jsonBody))
 		}
 	}
 
@@ -151,7 +174,9 @@ func (c *Client) doRequest(ctx context.Context, path string, body interface{}, r
 				return ctx.Err()
 			case <-time.After(wait):
 			}
-			c.rateLimiter.wait()
+			if err := c.rateLimiter.wait(ctx); err != nil {
+				return err
+			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
@@ -177,7 +202,7 @@ func (c *Client) doRequest(ctx context.Context, path string, body interface{}, r
 		}
 
 		if c.debug {
-			fmt.Printf("[track17] Response %d: %s\n", resp.StatusCode, string(respBody))
+			c.logger.Printf("[track17] Response %d: %s", resp.StatusCode, string(respBody))
 		}
 
 		// Handle HTTP-level errors
@@ -237,13 +262,23 @@ func newRateLimiter(rps int) *rateLimiter {
 }
 
 // wait blocks until a request can be made without exceeding the rate limit.
-func (rl *rateLimiter) wait() {
+// It respects context cancellation.
+func (rl *rateLimiter) wait(ctx context.Context) error {
 	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
 	now := time.Now()
+	var sleepDur time.Duration
 	if elapsed := now.Sub(rl.lastTime); elapsed < rl.interval {
-		time.Sleep(rl.interval - elapsed)
+		sleepDur = rl.interval - elapsed
 	}
-	rl.lastTime = time.Now()
+	rl.lastTime = now.Add(sleepDur)
+	rl.mu.Unlock()
+
+	if sleepDur > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sleepDur):
+		}
+	}
+	return nil
 }

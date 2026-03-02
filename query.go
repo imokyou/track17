@@ -1,6 +1,9 @@
 package track17
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // QueryService handles tracking information queries.
 type QueryService struct {
@@ -36,6 +39,12 @@ type GetTrackInfoResponse struct {
 //	    fmt.Printf("Number: %s, Status: %d\n", info.Number, info.Track.LatestStatus)
 //	}
 func (s *QueryService) GetTrackInfo(ctx context.Context, items []GetTrackInfoRequest) (*GetTrackInfoResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result GetTrackInfoResponse
 	if err := s.client.doRequest(ctx, "/gettrackinfo", items, &result); err != nil {
 		return nil, err

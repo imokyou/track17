@@ -1,6 +1,9 @@
 package track17
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // API error codes returned by the 17Track API.
 const (
@@ -80,6 +83,10 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("track17: API error %d: %s", e.Code, e.Message)
 }
 
+// Unwrap returns nil since APIError is a root error.
+// This method enables errors.Is and errors.As support.
+func (e *APIError) Unwrap() error { return nil }
+
 // IsInternalError returns true if the error is an internal server error.
 func (e *APIError) IsInternalError() bool { return e.Code == ErrInternalError }
 
@@ -115,8 +122,10 @@ type RejectedError struct {
 }
 
 // IsAPIError returns true and the underlying *APIError if err is an *APIError.
+// This function supports wrapped errors via errors.As.
 func IsAPIError(err error) (*APIError, bool) {
-	if apiErr, ok := err.(*APIError); ok {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
 		return apiErr, true
 	}
 	return nil, false

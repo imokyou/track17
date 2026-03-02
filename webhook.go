@@ -2,6 +2,7 @@ package track17
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -53,9 +54,12 @@ type WebhookData struct {
 //
 //	valid := track17.VerifySignature(payload, signature, "your-api-key")
 func VerifySignature(payload []byte, signature string, apiKey string) bool {
-	hash := sha256.Sum256([]byte(string(payload) + "/" + apiKey))
-	expected := hex.EncodeToString(hash[:])
-	return expected == signature
+	h := sha256.New()
+	h.Write(payload)
+	h.Write([]byte("/"))
+	h.Write([]byte(apiKey))
+	expected := hex.EncodeToString(h.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) == 1
 }
 
 // ParseWebhook reads and parses a webhook HTTP request.
@@ -75,11 +79,11 @@ func VerifySignature(payload []byte, signature string, apiKey string) bool {
 //	    w.WriteHeader(http.StatusOK)
 //	}
 func ParseWebhook(r *http.Request, apiKey string) (*WebhookEvent, error) {
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("track17: failed to read webhook body: %w", err)
 	}
-	defer r.Body.Close()
 
 	// Verify signature
 	signature := r.Header.Get("sign")

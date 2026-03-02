@@ -234,12 +234,23 @@ track17/
 ├── push.go           # Push 服务 (手动推送)
 ├── realtime.go       # RealTime 服务 (实时查询)
 ├── webhook.go        # WebHook (签名验证, 事件解析, Handler)
-├── track17_test.go   # 核心单元测试
+├── track17_test.go   # 核心单元测试 (43 个测试)
 ├── webhook_test.go   # WebHook 单元测试
+├── Makefile          # 构建/测试/CI 自动化
+├── CHANGELOG.md      # 版本变更记录
+├── docs/
+│   └── tutorial.md   # 保姆级使用教程
 └── examples/
-    ├── basic/        # 基础用法示例
-    └── webhook/      # WebHook 服务器示例
+    ├── quickstart/    # 5 分钟快速上手
+    ├── basic/         # 全功能演示
+    ├── error_handling/ # 错误处理最佳实践
+    ├── realtime/      # 实时查询示例
+    └── webhook/       # WebHook 服务器示例
 ```
+
+## 📖 教程
+
+👉 **[保姆级使用教程](docs/tutorial.md)** — 从零开始，手把手教你使用每个 API
 
 ## 📄 License
 

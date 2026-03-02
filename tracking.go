@@ -1,6 +1,9 @@
 package track17
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // TrackingService handles shipment registration and management operations.
 type TrackingService struct {
@@ -74,6 +77,12 @@ type RegisterAccepted struct {
 //	    {Number: "EE987654321US"},  // auto-detect carrier
 //	})
 func (s *TrackingService) Register(ctx context.Context, items []RegisterRequest) (*RegisterResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result RegisterResponse
 	if err := s.client.doRequest(ctx, "/register", items, &result); err != nil {
 		return nil, err
@@ -118,6 +127,12 @@ type ChangeCarrierAccepted struct {
 //	    {Number: "RR123456789CN", CarrierOld: 3011, CarrierNew: 3012},
 //	})
 func (s *TrackingService) ChangeCarrier(ctx context.Context, items []ChangeCarrierRequest) (*ChangeCarrierResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result ChangeCarrierResponse
 	if err := s.client.doRequest(ctx, "/changecarrier", items, &result); err != nil {
 		return nil, err
@@ -167,6 +182,12 @@ type ChangeInfoAccepted struct {
 //	    {Number: "RR123456789CN", CarrierCode: 3011, Tag: &tag},
 //	})
 func (s *TrackingService) ChangeInfo(ctx context.Context, items []ChangeInfoRequest) (*ChangeInfoResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result ChangeInfoResponse
 	if err := s.client.doRequest(ctx, "/changeinfo", items, &result); err != nil {
 		return nil, err
@@ -203,6 +224,12 @@ type StopTrackAccepted struct {
 //	    {Number: "RR123456789CN", CarrierCode: 3011},
 //	})
 func (s *TrackingService) StopTrack(ctx context.Context, items []StopTrackRequest) (*StopTrackResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result StopTrackResponse
 	if err := s.client.doRequest(ctx, "/stoptrack", items, &result); err != nil {
 		return nil, err
@@ -240,6 +267,12 @@ type ReTrackAccepted struct {
 //	    {Number: "RR123456789CN", CarrierCode: 3011},
 //	})
 func (s *TrackingService) ReTrack(ctx context.Context, items []ReTrackRequest) (*ReTrackResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result ReTrackResponse
 	if err := s.client.doRequest(ctx, "/retrack", items, &result); err != nil {
 		return nil, err
@@ -276,6 +309,12 @@ type DeleteTrackAccepted struct {
 //	    {Number: "RR123456789CN", CarrierCode: 3011},
 //	})
 func (s *TrackingService) DeleteTrack(ctx context.Context, items []DeleteTrackRequest) (*DeleteTrackResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result DeleteTrackResponse
 	if err := s.client.doRequest(ctx, "/deletetrack", items, &result); err != nil {
 		return nil, err

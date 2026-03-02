@@ -1,6 +1,9 @@
 package track17
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // RealTimeService handles real-time tracking queries.
 type RealTimeService struct {
@@ -80,6 +83,12 @@ type RealTimeAccepted struct {
 //	    },
 //	})
 func (s *RealTimeService) GetRealTimeTrackInfo(ctx context.Context, items []RealTimeRequest) (*RealTimeResponse, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("track17: items cannot be empty")
+	}
+	if len(items) > 40 {
+		return nil, fmt.Errorf("track17: too many items, max 40 per request, got %d", len(items))
+	}
 	var result RealTimeResponse
 	if err := s.client.doRequest(ctx, "/getRealTimeTrackInfo", items, &result); err != nil {
 		return nil, err
