@@ -34,11 +34,15 @@ func main() {
 	}
 
 	// 创建客户端 — 生产级配置
-	client := track17.New(apiKey,
+	client, err := track17.New(apiKey,
 		track17.WithTimeout(10*time.Second),
 		track17.WithRetry(3, time.Second),
 		track17.WithDebug(true), // 开启调试日志，生产环境建议关闭
+		track17.WithCircuitBreaker(5, 30*time.Second),
 	)
+	if err != nil {
+		log.Fatalf("初始化客户端失败: %v", err)
+	}
 	defer client.Close()
 
 	ctx := context.Background()

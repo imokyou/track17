@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestVerifySignature(t *testing.T) {
@@ -165,4 +166,117 @@ func TestWebhookHandlerWrongMethod(t *testing.T) {
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status 405, got %d", rr.Code)
 	}
+}
+
+// TestParseWebhookReplayAttack verifies stale timestamps are rejected.
+func TestParseWebhookReplayAttack(t *testing.T) {
+	apiKey := "test-key"
+	// Timestamp from 10 minutes ago — beyond the 5-minute window.
+	staleTime := time.Now().Add(-10 * time.Minute).Unix()
+
+	event := WebhookEvent{
+		Event:     EventTrackingUpdated,
+		Timestamp: staleTime,
+		Data:      &WebhookData{Number: "RR123456789CN", Carrier: 3011},
+	}
+	payload, _ := json.Marshal(event)
+	hash := sha256.Sum256([]byte(string(payload) + "/" + apiKey))
+	signature := hex.EncodeToString(hash[:])
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(payload))
+	req.Header.Set("sign", signature)
+
+	_, err := ParseWebhook(req, apiKey)
+	if err == nil {
+		t.Fatal("expected error for stale timestamp (replay attack)")
+	}
+	if !stringContains(err.Error(), "too old") {
+		t.Errorf("expected 'too old' in error, got: %v", err)
+	}
+}
+
+// TestParseWebhookFutureTimestamp verifies far-future timestamps are rejected.
+func TestParseWebhookFutureTimestamp(t *testing.T) {
+	apiKey := "test-key"
+	futureTime := time.Now().Add(10 * time.Minute).Unix()
+
+	event := WebhookEvent{
+		Event:     EventTrackingUpdated,
+		Timestamp: futureTime,
+		Data:      &WebhookData{Number: "RR123456789CN", Carrier: 3011},
+	}
+	payload, _ := json.Marshal(event)
+	hash := sha256.Sum256([]byte(string(payload) + "/" + apiKey))
+	signature := hex.EncodeToString(hash[:])
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(payload))
+	req.Header.Set("sign", signature)
+
+	_, err := ParseWebhook(req, apiKey)
+	if err == nil {
+		t.Fatal("expected error for future timestamp (replay attack)")
+	}
+	if !stringContains(err.Error(), "future") {
+		t.Errorf("expected 'future' in error, got: %v", err)
+	}
+}
+
+// TestParseWebhookFreshTimestamp verifies a current timestamp is accepted.
+func TestParseWebhookFreshTimestamp(t *testing.T) {
+	apiKey := "test-key"
+	freshTime := time.Now().Unix()
+
+	event := WebhookEvent{
+		Event:     EventTrackingUpdated,
+		Timestamp: freshTime,
+		Data:      &WebhookData{Number: "RR123456789CN", Carrier: 3011},
+	}
+	payload, _ := json.Marshal(event)
+	hash := sha256.Sum256([]byte(string(payload) + "/" + apiKey))
+	signature := hex.EncodeToString(hash[:])
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(payload))
+	req.Header.Set("sign", signature)
+
+	parsed, err := ParseWebhook(req, apiKey)
+	if err != nil {
+		t.Fatalf("unexpected error for fresh timestamp: %v", err)
+	}
+	if parsed.Timestamp != freshTime {
+		t.Errorf("expected Timestamp %d, got %d", freshTime, parsed.Timestamp)
+	}
+}
+
+// TestParseWebhookZeroTimestamp verifies events without timestamp field pass through.
+func TestParseWebhookZeroTimestamp(t *testing.T) {
+	apiKey := "test-key"
+	event := WebhookEvent{
+		Event: EventTrackingUpdated,
+		// Timestamp: 0 — absent / legacy event
+		Data: &WebhookData{Number: "RR123456789CN", Carrier: 3011},
+	}
+	payload, _ := json.Marshal(event)
+	hash := sha256.Sum256([]byte(string(payload) + "/" + apiKey))
+	signature := hex.EncodeToString(hash[:])
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(payload))
+	req.Header.Set("sign", signature)
+
+	_, err := ParseWebhook(req, apiKey)
+	if err != nil {
+		t.Fatalf("unexpected error for zero timestamp: %v", err)
+	}
+}
+
+// stringContains is a helper because strings package is not imported in this file.
+func stringContains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
 }

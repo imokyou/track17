@@ -6,7 +6,10 @@
 //
 // Usage:
 //
-//	client := track17.New("your-api-key")
+//	client, err := track17.New("your-api-key")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //
 //	// Register tracking numbers
 //	resp, err := client.Tracking.Register(ctx, []track17.RegisterRequest{
@@ -25,7 +28,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"sync"
@@ -47,12 +51,33 @@ const (
 )
 
 // Logger defines a minimal logging interface for the SDK.
+// Implementations must be safe for concurrent use.
 type Logger interface {
 	Printf(format string, v ...interface{})
 }
 
+// slogAdapter wraps *slog.Logger to satisfy the Logger interface.
+type slogAdapter struct {
+	l *slog.Logger
+}
+
+func (a *slogAdapter) Printf(format string, v ...interface{}) {
+	a.l.Debug(fmt.Sprintf(format, v...))
+}
+
+// maskAPIKey masks an API key for safe logging.
+// It shows the last 4 characters: "****xxxx".
+func maskAPIKey(key string) string {
+	if len(key) <= 4 {
+		return "****"
+	}
+	return "****" + key[len(key)-4:]
+}
+
 // Client is the 17Track API client. It manages communication with the 17Track
 // API v2.4 and provides access to the various API services.
+//
+// Client is safe for concurrent use by multiple goroutines.
 type Client struct {
 	// httpClient is the underlying HTTP client used for API requests.
 	httpClient *http.Client
@@ -65,6 +90,9 @@ type Client struct {
 
 	// rateLimiter controls request rate limiting.
 	rateLimiter *rateLimiter
+
+	// breaker is the circuit breaker for fault tolerance.
+	breaker *circuitBreaker
 
 	// retry configuration
 	maxRetries int
@@ -85,18 +113,27 @@ type Client struct {
 
 // New creates a new 17Track API client with the given API key and options.
 //
+// Returns an error if apiKey is empty, instead of panicking.
 // The client is safe for concurrent use by multiple goroutines.
 //
 // Example:
 //
-//	client := track17.New("your-api-key",
+//	client, err := track17.New("your-api-key",
 //	    track17.WithTimeout(10*time.Second),
 //	    track17.WithRetry(3, time.Second),
+//	    track17.WithCircuitBreaker(5, 30*time.Second),
 //	)
-func New(apiKey string, opts ...Option) *Client {
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+func New(apiKey string, opts ...Option) (*Client, error) {
 	if apiKey == "" {
-		panic("track17: API key must not be empty")
+		return nil, fmt.Errorf("track17: API key must not be empty")
 	}
+
+	slogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
 
 	c := &Client{
 		httpClient: &http.Client{
@@ -106,15 +143,18 @@ func New(apiKey string, opts ...Option) *Client {
 		baseURL:    DefaultBaseURL,
 		maxRetries: 0,
 		retryWait:  time.Second,
-		logger:     log.New(os.Stderr, "", log.LstdFlags),
+		breaker:    newCircuitBreaker(5, 30*time.Second),
+		logger:     &slogAdapter{l: slogger},
 	}
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
-	// Initialize rate limiter
-	c.rateLimiter = newRateLimiter(DefaultRateLimit)
+	// Initialize rate limiter after options are applied (rps may be overridden)
+	if c.rateLimiter == nil {
+		c.rateLimiter = newRateLimiter(DefaultRateLimit)
+	}
 
 	// Initialize services
 	c.Tracking = &TrackingService{client: c}
@@ -122,7 +162,7 @@ func New(apiKey string, opts ...Option) *Client {
 	c.Push = &PushService{client: c}
 	c.RealTime = &RealTimeService{client: c}
 
-	return c
+	return c, nil
 }
 
 // Close releases any resources held by the client.
@@ -138,24 +178,27 @@ type apiResponse struct {
 }
 
 // doRequest performs an authenticated API request to the given path.
+// It enforces rate limiting, circuit breaking, and retry with exponential
+// back-off + jitter.
 func (c *Client) doRequest(ctx context.Context, path string, body interface{}, result interface{}) error {
-	// Wait for rate limiter
+	// Check circuit breaker before acquiring the rate-limiter slot.
+	if err := c.breaker.Allow(); err != nil {
+		return err
+	}
+
+	// Wait for rate limiter.
 	if err := c.rateLimiter.wait(ctx); err != nil {
 		return err
 	}
 
-	// Marshal request body
-	var bodyReader io.Reader
-	if body != nil {
-		jsonBody, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("track17: failed to marshal request body: %w", err)
-		}
-		bodyReader = bytes.NewReader(jsonBody)
+	// Serialize body once; re-use for retries.
+	jsonBody, err := c.serializeBody(body)
+	if err != nil {
+		return err
+	}
 
-		if c.debug {
-			c.logger.Printf("[track17] POST %s%s\n  Body: %s", c.baseURL, path, string(jsonBody))
-		}
+	if c.debug && body != nil {
+		c.logger.Printf("[track17] POST %s%s\n  Body: %s", c.baseURL, path, string(jsonBody))
 	}
 
 	url := c.baseURL + path
@@ -163,12 +206,7 @@ func (c *Client) doRequest(ctx context.Context, path string, body interface{}, r
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
-			// Re-create body reader for retry
-			if body != nil {
-				jsonBody, _ := json.Marshal(body)
-				bodyReader = bytes.NewReader(jsonBody)
-			}
-			wait := c.retryWait * time.Duration(1<<uint(attempt-1)) // Exponential backoff
+			wait := c.jitteredWait(attempt)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -179,72 +217,131 @@ func (c *Client) doRequest(ctx context.Context, path string, body interface{}, r
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
+		respBody, statusCode, err := c.executeRequest(ctx, url, jsonBody)
 		if err != nil {
-			return fmt.Errorf("track17: failed to create request: %w", err)
-		}
-
-		req.Header.Set("17token", c.apiKey)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "track17-go-sdk/"+Version)
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("track17: request failed: %w", err)
-			continue
-		}
-
-		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = fmt.Errorf("track17: failed to read response body: %w", err)
+			lastErr = err
+			c.breaker.RecordFailure()
 			continue
 		}
 
 		if c.debug {
-			c.logger.Printf("[track17] Response %d: %s", resp.StatusCode, string(respBody))
+			c.logger.Printf("[track17] Response %d: %s", statusCode, string(respBody))
 		}
 
-		// Handle HTTP-level errors
-		if resp.StatusCode != http.StatusOK {
+		// Handle HTTP-level errors.
+		if statusCode != http.StatusOK {
 			lastErr = &APIError{
-				Code:       resp.StatusCode,
-				Message:    fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody)),
-				StatusCode: resp.StatusCode,
+				Code:       statusCode,
+				Message:    fmt.Sprintf("HTTP %d: %s", statusCode, string(respBody)),
+				StatusCode: statusCode,
 			}
-			// Only retry on 5xx errors or 429
-			if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			if statusCode >= 500 || statusCode == http.StatusTooManyRequests {
+				c.breaker.RecordFailure()
 				continue
 			}
+			c.breaker.RecordFailure()
 			return lastErr
 		}
 
-		// Parse API response
-		var apiResp apiResponse
-		if err := json.Unmarshal(respBody, &apiResp); err != nil {
-			return fmt.Errorf("track17: failed to parse response: %w", err)
+		// Parse and validate API-level response.
+		if err := c.parseAPIResponse(respBody, result); err != nil {
+			c.breaker.RecordFailure()
+			return err
 		}
 
-		// Check API-level error code
-		if apiResp.Code != 0 {
-			return &APIError{
-				Code:       apiResp.Code,
-				Message:    getErrorMessage(apiResp.Code),
-				StatusCode: resp.StatusCode,
-			}
-		}
-
-		// Parse result
-		if result != nil && apiResp.Data != nil {
-			if err := json.Unmarshal(apiResp.Data, result); err != nil {
-				return fmt.Errorf("track17: failed to parse response data: %w", err)
-			}
-		}
-
+		c.breaker.RecordSuccess()
 		return nil
 	}
 
 	return lastErr
+}
+
+// serializeBody marshals body to JSON. Returns nil bytes when body is nil.
+func (c *Client) serializeBody(body interface{}) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("track17: failed to marshal request body: %w", err)
+	}
+	return b, nil
+}
+
+// buildRequest constructs an authenticated HTTP POST request.
+func (c *Client) buildRequest(ctx context.Context, url string, body []byte) (*http.Request, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("track17: failed to create request: %w", err)
+	}
+
+	req.Header.Set("17token", c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "track17-go-sdk/"+Version)
+
+	if c.debug {
+		c.logger.Printf("[track17] 17token: %s", maskAPIKey(c.apiKey))
+	}
+
+	return req, nil
+}
+
+// executeRequest sends a single HTTP request and returns the response body and status code.
+func (c *Client) executeRequest(ctx context.Context, url string, body []byte) ([]byte, int, error) {
+	req, err := c.buildRequest(ctx, url, body)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("track17: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("track17: failed to read response body: %w", err)
+	}
+
+	return respBody, resp.StatusCode, nil
+}
+
+// parseAPIResponse unmarshals the 17Track API envelope and then the data payload.
+func (c *Client) parseAPIResponse(respBody []byte, result interface{}) error {
+	var apiResp apiResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return fmt.Errorf("track17: failed to parse response: %w", err)
+	}
+
+	if apiResp.Code != 0 {
+		return &APIError{
+			Code:    apiResp.Code,
+			Message: getErrorMessage(apiResp.Code),
+		}
+	}
+
+	if result != nil && apiResp.Data != nil {
+		if err := json.Unmarshal(apiResp.Data, result); err != nil {
+			return fmt.Errorf("track17: failed to parse response data: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// jitteredWait returns an exponential back-off duration with ±25% random jitter
+// to avoid the "thundering herd" problem when many goroutines retry at once.
+func (c *Client) jitteredWait(attempt int) time.Duration {
+	base := c.retryWait * time.Duration(1<<uint(attempt-1))
+	// Add ±25% jitter: jitter ∈ [0, base/2)
+	jitter := time.Duration(rand.Int63n(int64(base)/2 + 1))
+	return base + jitter
 }
 
 // rateLimiter implements a simple token bucket rate limiter.
@@ -256,6 +353,9 @@ type rateLimiter struct {
 
 // newRateLimiter creates a rate limiter that allows rps requests per second.
 func newRateLimiter(rps int) *rateLimiter {
+	if rps <= 0 {
+		rps = DefaultRateLimit
+	}
 	return &rateLimiter{
 		interval: time.Second / time.Duration(rps),
 	}

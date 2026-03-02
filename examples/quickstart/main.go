@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/imokyou/track17"
 )
@@ -26,7 +27,12 @@ func main() {
 		log.Fatal("❌ 请设置环境变量: export TRACK17_API_KEY=你的密钥")
 	}
 
-	client := track17.New(apiKey)
+	client, err := track17.New(apiKey,
+		track17.WithCircuitBreaker(5, 30*time.Second),
+	)
+	if err != nil {
+		log.Fatalf("初始化客户端失败: %v", err)
+	}
 	defer client.Close()
 
 	ctx := context.Background()

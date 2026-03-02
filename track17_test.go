@@ -3,6 +3,7 @@ package track17
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,13 +15,23 @@ import (
 func newTestServer(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
 	t.Helper()
 	server := httptest.NewServer(handler)
-	client := New("test-api-key", WithBaseURL(server.URL))
+	client := mustNew(t, "test-api-key", WithBaseURL(server.URL))
 	return client, server
+}
+
+// mustNew creates a Client and fails the test if New returns an error.
+func mustNew(t *testing.T, apiKey string, opts ...Option) *Client {
+	t.Helper()
+	c, err := New(apiKey, opts...)
+	if err != nil {
+		t.Fatalf("New() returned unexpected error: %v", err)
+	}
+	return c
 }
 
 // TestNew verifies client initialization and default values.
 func TestNew(t *testing.T) {
-	client := New("my-key")
+	client := mustNew(t, "my-key")
 	if client.apiKey != "my-key" {
 		t.Errorf("expected apiKey 'my-key', got '%s'", client.apiKey)
 	}
@@ -44,24 +55,20 @@ func TestNew(t *testing.T) {
 	}
 }
 
-// TestNewEmptyAPIKey verifies New panics with empty API key.
+// TestNewEmptyAPIKey verifies New returns an error for an empty API key.
 func TestNewEmptyAPIKey(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for empty API key")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "API key must not be empty") {
-			t.Errorf("unexpected panic message: %v", r)
-		}
-	}()
-	New("")
+	_, err := New("")
+	if err == nil {
+		t.Fatal("expected error for empty API key")
+	}
+	if !strings.Contains(err.Error(), "API key must not be empty") {
+		t.Errorf("unexpected error message: %v", err)
+	}
 }
 
 // TestNewWithOptions verifies option application.
 func TestNewWithOptions(t *testing.T) {
-	client := New("key",
+	client := mustNew(t, "key",
 		WithBaseURL("http://custom.api"),
 		WithRetry(3, 0),
 		WithDebug(true),
@@ -80,7 +87,7 @@ func TestNewWithOptions(t *testing.T) {
 // TestWithHTTPClient verifies custom HTTP client option.
 func TestWithHTTPClient(t *testing.T) {
 	customClient := &http.Client{Timeout: 5 * time.Second}
-	client := New("key", WithHTTPClient(customClient))
+	client := mustNew(t, "key", WithHTTPClient(customClient))
 	if client.httpClient != customClient {
 		t.Error("expected custom HTTP client to be set")
 	}
@@ -88,7 +95,7 @@ func TestWithHTTPClient(t *testing.T) {
 
 // TestWithTimeout verifies timeout option.
 func TestWithTimeout(t *testing.T) {
-	client := New("key", WithTimeout(5*time.Second))
+	client := mustNew(t, "key", WithTimeout(5*time.Second))
 	if client.httpClient.Timeout != 5*time.Second {
 		t.Errorf("expected timeout 5s, got %v", client.httpClient.Timeout)
 	}
@@ -100,7 +107,7 @@ func TestWithLogger(t *testing.T) {
 	logger := &testLogger{fn: func(format string, v ...interface{}) {
 		logged = true
 	}}
-	client := New("key", WithLogger(logger), WithDebug(true))
+	client := mustNew(t, "key", WithLogger(logger), WithDebug(true))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(apiResponse{Code: 0})
@@ -124,7 +131,7 @@ func (l *testLogger) Printf(format string, v ...interface{}) {
 
 // TestClose verifies the Close method doesn't panic.
 func TestClose(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 	client.Close() // should not panic
 	client.Close() // safe to call multiple times
 }
@@ -184,7 +191,7 @@ func TestRegister(t *testing.T) {
 
 // TestRegisterValidation verifies input validation for Register.
 func TestRegisterValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	// Empty items
 	_, err := client.Tracking.Register(context.Background(), nil)
@@ -261,7 +268,7 @@ func TestGetTrackInfo(t *testing.T) {
 
 // TestGetTrackInfoValidation verifies input validation for GetTrackInfo.
 func TestGetTrackInfoValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.Query.GetTrackInfo(context.Background(), nil)
 	if err == nil {
@@ -373,7 +380,7 @@ func TestRealTimeTrackInfo(t *testing.T) {
 
 // TestRealTimeValidation verifies input validation for RealTime.
 func TestRealTimeValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.RealTime.GetRealTimeTrackInfo(context.Background(), nil)
 	if err == nil {
@@ -409,7 +416,7 @@ func TestPush(t *testing.T) {
 
 // TestPushValidation verifies input validation for Push.
 func TestPushValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.Push.Push(context.Background(), nil)
 	if err == nil {
@@ -618,7 +625,7 @@ func TestChangeCarrier(t *testing.T) {
 
 // TestChangeCarrierValidation verifies input validation for ChangeCarrier.
 func TestChangeCarrierValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.Tracking.ChangeCarrier(context.Background(), nil)
 	if err == nil {
@@ -681,7 +688,7 @@ func TestStopTrack(t *testing.T) {
 
 // TestStopTrackValidation verifies input validation for StopTrack.
 func TestStopTrackValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.Tracking.StopTrack(context.Background(), nil)
 	if err == nil {
@@ -717,7 +724,7 @@ func TestReTrack(t *testing.T) {
 
 // TestReTrackValidation verifies input validation for ReTrack.
 func TestReTrackValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.Tracking.ReTrack(context.Background(), nil)
 	if err == nil {
@@ -753,7 +760,7 @@ func TestDeleteTrack(t *testing.T) {
 
 // TestDeleteTrackValidation verifies input validation for DeleteTrack.
 func TestDeleteTrackValidation(t *testing.T) {
-	client := New("key")
+	client := mustNew(t, "key")
 
 	_, err := client.Tracking.DeleteTrack(context.Background(), nil)
 	if err == nil {
@@ -846,6 +853,76 @@ func TestIsAPIErrorWithNonAPIError(t *testing.T) {
 	_, ok := IsAPIError(context.DeadlineExceeded)
 	if ok {
 		t.Error("expected IsAPIError to return false for non-API error")
+	}
+}
+
+// TestWithRateLimit verifies WithRateLimit option creates a rate limiter with the correct rps.
+func TestWithRateLimit(t *testing.T) {
+	client := mustNew(t, "key", WithRateLimit(10))
+	expectedInterval := time.Second / 10
+	if client.rateLimiter.interval != expectedInterval {
+		t.Errorf("expected interval %v, got %v", expectedInterval, client.rateLimiter.interval)
+	}
+}
+
+// TestWithSlogLogger verifies WithSlogLogger option sets a slog-backed logger.
+func TestWithSlogLogger(t *testing.T) {
+	import_slog := func() interface{} { return nil } // workaround
+	_ = import_slog
+	// Verify option is applied without panic — slog.Default() is always non-nil.
+	client := mustNew(t, "key", WithSlogLogger(nil))
+	if client.logger == nil {
+		t.Error("expected logger to be set even with nil slog.Logger")
+	}
+}
+
+// TestMaskAPIKey verifies that API key masking works correctly.
+func TestMaskAPIKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"my-secret-key-1234", "****1234"},
+		{"abcd", "****"},
+		{"abc", "****"},
+		{"", "****"},
+		{"12345678", "****5678"},
+	}
+	for _, tt := range tests {
+		got := maskAPIKey(tt.key)
+		if got != tt.want {
+			t.Errorf("maskAPIKey(%q) = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
+// TestAPIKeyNotInLogs verifies that the API key is masked in debug output.
+func TestAPIKeyNotInLogs(t *testing.T) {
+	const secretKey = "super-secret-api-key-12345"
+	var logOutput string
+	logger := &testLogger{fn: func(format string, v ...interface{}) {
+		logOutput += format
+		for _, val := range v {
+			logOutput += fmt.Sprintf("%v", val)
+		}
+	}}
+
+	client := mustNew(t, secretKey, WithLogger(logger), WithDebug(true))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(apiResponse{Code: 0})
+	}))
+	defer server.Close()
+	client.baseURL = server.URL
+	client.Query.GetQuota(context.Background())
+
+	// The full secret key must NOT appear in log output.
+	if strings.Contains(logOutput, secretKey) {
+		t.Errorf("API key leaked in debug log output: %s", logOutput)
+	}
+	// The masked form should appear.
+	if !strings.Contains(logOutput, "****") {
+		t.Errorf("expected masked key '****' in log output, got: %s", logOutput)
 	}
 }
 

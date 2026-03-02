@@ -27,10 +27,14 @@ func main() {
 	}
 
 	// 生产级配置：自动重试 + 超时
-	client := track17.New(apiKey,
+	client, err := track17.New(apiKey,
 		track17.WithTimeout(10*time.Second),
 		track17.WithRetry(3, time.Second),
+		track17.WithCircuitBreaker(5, 30*time.Second),
 	)
+	if err != nil {
+		log.Fatalf("初始化客户端失败: %v", err)
+	}
 	defer client.Close()
 
 	ctx := context.Background()

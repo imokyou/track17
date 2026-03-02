@@ -8,6 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
+)
+
+const (
+	// webhookMaxAge is the maximum allowed age of a webhook event.
+	// Events with a timestamp older than this are rejected to prevent replay attacks.
+	webhookMaxAge = 5 * time.Minute
 )
 
 // Webhook event type constants.
@@ -23,6 +30,10 @@ const (
 type WebhookEvent struct {
 	// Event is the event type (e.g., "TRACKING_UPDATED", "TRACKING_STOPPED").
 	Event string `json:"event"`
+
+	// Timestamp is the Unix timestamp (seconds) when the event was generated.
+	// Used to detect and reject replay attacks. Zero means the field is absent.
+	Timestamp int64 `json:"timestamp,omitempty"`
 
 	// Data contains the tracking information associated with the event.
 	Data *WebhookData `json:"data,omitempty"`
@@ -65,7 +76,13 @@ func VerifySignature(payload []byte, signature string, apiKey string) bool {
 // ParseWebhook reads and parses a webhook HTTP request.
 // It verifies the signature and returns the parsed event.
 //
-// Returns an error if the signature is invalid or the payload cannot be parsed.
+// Replay attack protection: if the event's timestamp is present and older than
+// 5 minutes (or more than 5 minutes in the future), the request is rejected.
+//
+// Returns an error if:
+//   - The signature header is missing or invalid
+//   - The payload cannot be parsed
+//   - The timestamp indicates a replay attack
 //
 // Example:
 //
@@ -99,6 +116,18 @@ func ParseWebhook(r *http.Request, apiKey string) (*WebhookEvent, error) {
 	var event WebhookEvent
 	if err := json.Unmarshal(body, &event); err != nil {
 		return nil, fmt.Errorf("track17: failed to parse webhook payload: %w", err)
+	}
+
+	// Replay attack protection: reject events with a stale or future timestamp.
+	if event.Timestamp != 0 {
+		eventTime := time.Unix(event.Timestamp, 0)
+		age := time.Since(eventTime)
+		if age > webhookMaxAge {
+			return nil, fmt.Errorf("track17: webhook event is too old (%s ago); possible replay attack", age.Round(time.Second))
+		}
+		if age < -webhookMaxAge {
+			return nil, fmt.Errorf("track17: webhook event timestamp is in the future (%s ahead); possible replay attack", (-age).Round(time.Second))
+		}
 	}
 
 	return &event, nil
